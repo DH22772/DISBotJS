@@ -522,7 +522,7 @@ async function setupInfoChannels() {
               },
               {
                 name: '📝 Important Notes',
-                value: '• All moderation commands are silent in public channels\n• Everything is logged in bot-logs\n• Use DMs for sensitive user issues\n• Coordinate major actions here',
+                value: `• All moderation commands are silent in public channels\n• Everything is logged in bot-logs\n• Use DMs for sensitive user issues\n• Coordinate major actions in ${guild.channels.cache.find(c => c.name === 'mod-chat')?.toString() || '#mod-chat'}`,
                 inline: true
               }
             ],
@@ -1286,17 +1286,48 @@ client.on('messageCreate', async (message) => {
   }
 
   // PING COMMAND
-  if (command === 'ping') {
-    // Check if bot has permission to send messages in this channel
-    if (!hasPermission(message.channel, PermissionsBitField.Flags.SendMessages)) {
-      logToChannel(`❌ Missing Send Messages permission in ${message.channel}`);
-      return;
-    }
-
-    message.reply('🏓 Pong!').then(botMsg => {
-      logBotResponse(message, botMsg.content);
-    });
+  // PING COMMAND
+// PING COMMAND WITH LATENCY
+if (command === 'ping') {
+  // Check if bot has permission to send messages in this channel
+  if (!hasPermission(message.channel, PermissionsBitField.Flags.SendMessages)) {
+    logToChannel(`❌ Missing Send Messages permission in ${message.channel}`);
+    return;
   }
+
+  const sent = await message.reply('🏓 Calculating ping...');
+  const latency = sent.createdTimestamp - message.createdTimestamp;
+  const apiLatency = Math.round(client.ws.ping);
+
+  const pingEmbed = {
+    color: 0x0099ff,
+    title: '🏓 Pong!',
+    fields: [
+      {
+        name: '📡 Bot Latency',
+        value: `**${latency}ms**`,
+        inline: true
+      },
+      {
+        name: '🌐 API Latency',
+        value: `**${apiLatency}ms**`,
+        inline: true
+      },
+      {
+        name: '💓 Heartbeat',
+        value: `**${client.ws.ping}ms**`,
+        inline: true
+      }
+    ],
+    footer: { text: `Requested by ${message.author.tag}` },
+    timestamp: new Date()
+  };
+
+  sent.edit({ content: null, embeds: [pingEmbed] });
+  logBotResponse(message, `Ping: ${latency}ms | API: ${apiLatency}ms`, 'Ping');
+}
+
+  
 
   // ADD CUSTOM RESPONSE
   if (command === 'addresponse') {
