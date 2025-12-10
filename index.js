@@ -1,4 +1,5 @@
 const { Client, GatewayIntentBits, PermissionsBitField, Collection } = require('discord.js');
+const fs = require('fs');
 require('dotenv').config();
 
 const client = new Client({
@@ -18,41 +19,138 @@ const selfAssignableRoles = new Set();
 
 let logChannel = null;
 
+// ==================== DATA PERSISTENCE SYSTEM ====================
+const DATA_FILE = './bot_data.json';
+
+// Function to save all data to file
+function saveData() {
+  try {
+    const data = {
+      userWarnings: Array.from(userWarnings.entries()),
+      customResponses: Array.from(customResponses.entries()),
+      selfAssignableRoles: Array.from(selfAssignableRoles),
+      reminders: Array.from(reminders.entries()).map(([id, reminder]) => ({
+        id,
+        ...reminder,
+        time: reminder.time // Save timestamp
+      })),
+      lastSaved: new Date().toISOString()
+    };
+    
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+    console.log('💾 Data saved successfully');
+    
+    // Log to channel if available
+    if (logChannel) {
+      logToChannel('💾 Bot data saved to file');
+    }
+  } catch (error) {
+    console.error('❌ Failed to save data:', error);
+  }
+}
+
+// Function to load data from file
+function loadData() {
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+      
+      // Load user warnings
+      if (data.userWarnings && Array.isArray(data.userWarnings)) {
+        userWarnings.clear();
+        data.userWarnings.forEach(([userId, warnings]) => {
+          userWarnings.set(userId, warnings);
+        });
+        console.log(`📂 Loaded ${userWarnings.size} users with warnings`);
+      }
+      
+      // Load custom responses
+      if (data.customResponses && Array.isArray(data.customResponses)) {
+        customResponses.clear();
+        data.customResponses.forEach(([trigger, response]) => {
+          customResponses.set(trigger, response);
+        });
+        console.log(`📂 Loaded ${customResponses.size} custom responses`);
+      }
+      
+      // Load self-assignable roles
+      if (data.selfAssignableRoles && Array.isArray(data.selfAssignableRoles)) {
+        selfAssignableRoles.clear();
+        data.selfAssignableRoles.forEach(roleId => {
+          selfAssignableRoles.add(roleId);
+        });
+        console.log(`📂 Loaded ${selfAssignableRoles.size} self-assignable roles`);
+      }
+      
+      // Load reminders and reschedule them
+      if (data.reminders && Array.isArray(data.reminders)) {
+        reminders.clear();
+        const now = Date.now();
+        
+        data.reminders.forEach(reminderData => {
+          const { id, userId, channelId, text, time } = reminderData;
+          
+          // Only reschedule reminders that haven't passed yet
+          if (time > now) {
+            reminders.set(id, { userId, channelId, text, time });
+            
+            // Calculate time until reminder
+            const timeUntilReminder = time - now;
+            
+            // Reschedule the reminder
+            setTimeout(() => {
+              const reminder = reminders.get(id);
+              if (reminder) {
+                const channel = client.channels.cache.get(reminder.channelId);
+                if (channel) {
+                  channel.send(`⏰ <@${reminder.userId}> Reminder: ${reminder.text}`);
+                  logToChannel(`⏰ **Reminder Sent** - User ID: ${reminder.userId}: ${reminder.text}`);
+                }
+                reminders.delete(id);
+                saveData(); // Save after removing reminder
+              }
+            }, timeUntilReminder);
+            
+            console.log(`⏰ Rescheduled reminder: ${text} (in ${Math.round(timeUntilReminder/1000)} seconds)`);
+          } else {
+            console.log(`⚠️ Skipping expired reminder: ${text}`);
+          }
+        });
+        console.log(`📂 Loaded ${reminders.size} active reminders`);
+      }
+      
+      if (data.lastSaved) {
+        console.log(`📅 Data last saved: ${new Date(data.lastSaved).toLocaleString()}`);
+      }
+    } else {
+      console.log('📂 No existing data file found, starting fresh');
+    }
+  } catch (error) {
+    console.error('❌ Failed to load data:', error);
+  }
+}
+
+// Auto-save every 5 minutes
+setInterval(saveData, 5 * 60 * 1000);
+
+// Save on process exit
+process.on('SIGINT', () => {
+  console.log('💾 Saving data before shutdown...');
+  saveData();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('💾 Saving data before shutdown...');
+  saveData();
+  process.exit(0);
+});
+
+// ==================== UTILITY FUNCTIONS ====================
 // CHECK IF BOT HAS PERMISSION IN CHANNEL
 function hasPermission(channel, permission) {
   return channel.permissionsFor(client.user)?.has(permission) || false;
 }
-
-client.once('ready', async () => {
-  console.log(`✅ Bot is online as ${client.user.tag}!`);
-  
-  // Find log channel
-  logChannel = client.channels.cache.find(channel => 
-    channel.name === 'bot-log' || channel.name === 'bot_log'
-  );
-  
-  if (!logChannel) {
-    logChannel = client.channels.cache.get('1438130803983913162'); // Your channel ID
-  }
-  
-  if (logChannel) {
-    console.log(`📝 Found log channel: #${logChannel.name}`);
-    
-    if (!hasPermission(logChannel, PermissionsBitField.Flags.SendMessages)) {
-      console.log('❌ Bot cannot send messages in log channel');
-      return;
-    }
-    
-    logToChannel('🤖 Bot started and ready!');
-    await setupWelcomeChannel();
-    await setupAnnouncementsChannel();
-    await setupInfoChannels();
-    await setupRulesChannel();
-    await setupReportsChannel();
-  } else {
-    console.log('❌ Could not find bot-log channel');
-  }
-});
 
 // FUNCTION TO LOG TO BOT_LOG CHANNEL
 function logToChannel(content) {
@@ -88,6 +186,44 @@ function logBotResponse(originalMessage, botResponse, action = 'Response') {
   logToChannel(`**${action}** in ${originalMessage.channel}\n**User:** ${originalMessage.author.tag} | **Content:** ${originalMessage.content}\n**Bot:** ${botResponse}`);
 }
 
+// ==================== EVENT HANDLERS ====================
+client.once('ready', async () => {
+  console.log(`✅ Bot is online as ${client.user.tag}!`);
+  
+  // Load saved data
+  loadData();
+  
+  // Find log channel
+  logChannel = client.channels.cache.find(channel => 
+    channel.name === 'bot-log' || channel.name === 'bot_log'
+  );
+  
+  if (!logChannel) {
+    logChannel = client.channels.cache.get('1438130803983913162'); // Your channel ID
+  }
+  
+  if (logChannel) {
+    console.log(`📝 Found log channel: #${logChannel.name}`);
+    
+    if (!hasPermission(logChannel, PermissionsBitField.Flags.SendMessages)) {
+      console.log('❌ Bot cannot send messages in log channel');
+      return;
+    }
+    
+    logToChannel('🤖 Bot started and ready!');
+    logToChannel(`📊 Loaded data: ${userWarnings.size} warned users, ${customResponses.size} custom responses, ${selfAssignableRoles.size} self-assignable roles`);
+    
+    await setupWelcomeChannel();
+    await setupAnnouncementsChannel();
+    await setupInfoChannels();
+    await setupRulesChannel();
+    await setupReportsChannel();
+  } else {
+    console.log('❌ Could not find bot-log channel');
+  }
+});
+
+// ==================== CHANNEL SETUP FUNCTIONS ====================
 // WELCOME CHANNEL SETUP
 async function setupWelcomeChannel() {
   const guild = client.guilds.cache.first();
@@ -709,6 +845,7 @@ client.on('messageCreate', async (message) => {
 
     logChannel = channel;
     logToChannel(`📝 Log channel set to ${channel} by ${message.author.tag}`);
+    saveData(); // Save after changing log channel
     message.reply(`✅ Log channel set to ${channel}`).then(botMsg => {
       logBotResponse(message, botMsg.content, 'Config Update');
     });
@@ -792,7 +929,7 @@ client.on('messageCreate', async (message) => {
       });
   }
 
-  // WARN COMMAND (SILENT)
+  // WARN COMMAND (SILENT) - NOW SAVED
   if (command === 'warn') {
     if (!message.member.permissions.has(PermissionsBitField.Flags.ModerateMembers)) {
       logToChannel(`❌ **Permission Denied** - ${message.author.tag} tried to use !warn`);
@@ -815,7 +952,7 @@ client.on('messageCreate', async (message) => {
     userWarnings.get(userId).push({
       reason,
       moderator: message.author.tag,
-      timestamp: new Date(),
+      timestamp: new Date().toISOString(),
       channel: message.channel.name
     });
 
@@ -838,6 +975,9 @@ client.on('messageCreate', async (message) => {
 
     member.send(`You have been warned in **${message.guild.name}** for: ${reason}\nThis is warning #${totalWarnings}.`)
       .catch(() => logToChannel('❌ Could not DM warned user'));
+    
+    // Save data after warning
+    saveData();
   }
 
   // WARNINGS COMMAND (SILENT)
@@ -851,9 +991,28 @@ client.on('messageCreate', async (message) => {
     }
 
     logToChannel(`📝 **Warnings Check** - ${message.author.tag} checked ${member.user.tag} - ${warnings.length} warnings total`);
+    
+    // Optionally, you can show warnings to the user
+    if (hasPermission(message.channel, PermissionsBitField.Flags.SendMessages)) {
+      const warningList = warnings.map((w, i) => 
+        `${i+1}. **${w.reason}** - By ${w.moderator} on ${new Date(w.timestamp).toLocaleDateString()}`
+      ).join('\n');
+      
+      const warningsEmbed = {
+        color: 0xffa500,
+        title: `⚠️ Warnings for ${member.user.tag}`,
+        description: `Total warnings: **${warnings.length}**\n\n${warningList}`,
+        footer: { text: `Checked by ${message.author.tag}` },
+        timestamp: new Date()
+      };
+      
+      message.reply({ embeds: [warningsEmbed] }).then(botMsg => {
+        setTimeout(() => botMsg.delete().catch(() => {}), 10000);
+      });
+    }
   }
 
-  // CLEAR WARNINGS COMMAND (SILENT)
+  // CLEAR WARNINGS COMMAND (SILENT) - NOW SAVED
   if (command === 'clearwarnings') {
     if (!message.member.permissions.has(PermissionsBitField.Flags.ModerateMembers)) {
       logToChannel(`❌ **Permission Denied** - ${message.author.tag} tried to use !clearwarnings`);
@@ -882,6 +1041,9 @@ client.on('messageCreate', async (message) => {
         timestamp: new Date()
       }]
     });
+    
+    // Save data after clearing warnings
+    saveData();
   }
 
   // CLEAR MESSAGES COMMAND (SILENT)
@@ -964,6 +1126,8 @@ client.on('messageCreate', async (message) => {
       .map(role => role.toString())
       .slice(0, 10);
 
+    const userWarningsCount = userWarnings.get(member.id)?.length || 0;
+    
     const userInfoEmbed = {
       color: 0x0099ff,
       author: { name: `${user.tag}`, icon_url: user.displayAvatarURL({ dynamic: true, size: 512 }) },
@@ -976,7 +1140,8 @@ client.on('messageCreate', async (message) => {
         { name: `🎭 Roles [${roles.length}]`, value: roles.length > 0 ? roles.join(' ') : 'No roles', inline: false },
         { name: '🎨 Color', value: member.displayHexColor, inline: true },
         { name: '📛 Nickname', value: member.nickname || 'None', inline: true },
-        { name: '🚀 Boosting', value: member.premiumSince ? `<t:${Math.floor(member.premiumSinceTimestamp / 1000)}:R>` : 'Not boosting', inline: true }
+        { name: '🚀 Boosting', value: member.premiumSince ? `<t:${Math.floor(member.premiumSinceTimestamp / 1000)}:R>` : 'Not boosting', inline: true },
+        { name: '⚠️ Warnings', value: userWarningsCount.toString(), inline: true }
       ],
       footer: { text: `Requested by ${message.author.tag}` },
       timestamp: new Date()
@@ -991,7 +1156,7 @@ client.on('messageCreate', async (message) => {
       });
   }
 
-  // REMINDER COMMAND
+  // REMINDER COMMAND - NOW SAVED
   if (command === 'remindme') {
     // Check if bot has permission to send messages in this channel
     if (!hasPermission(message.channel, PermissionsBitField.Flags.SendMessages)) {
@@ -1051,22 +1216,26 @@ client.on('messageCreate', async (message) => {
       logBotResponse(message, botMsg.content, 'Reminder Set');
     });
 
+    // Save data after setting reminder
+    saveData();
+
     setTimeout(() => {
       const reminder = reminders.get(reminderId);
       if (reminder) {
         const channel = client.channels.cache.get(reminder.channelId);
         if (channel) {
           channel.send(`⏰ <@${reminder.userId}> Reminder: ${reminder.text}`);
-          logToChannel(`⏰ **Reminder Sent** - ${message.author.tag}: ${reminder.text}`);
+          logToChannel(`⏰ **Reminder Sent** - User ID: ${reminder.userId}: ${reminder.text}`);
         }
         reminders.delete(reminderId);
+        saveData(); // Save after removing reminder
       }
     }, milliseconds);
   }
 
   // ROLE MANAGEMENT COMMANDS
 
-  // ADD SELF-ASSIGNABLE ROLE (Admin/Mod only)
+  // ADD SELF-ASSIGNABLE ROLE (Admin/Mod only) - NOW SAVED
   if (command === 'addassignablerole') {
     if (!message.member.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
       message.reply('❌ You need **Manage Roles** permission.').then(botMsg => {
@@ -1087,9 +1256,12 @@ client.on('messageCreate', async (message) => {
     message.reply(`✅ Added **${role.name}** as a self-assignable role.`).then(botMsg => {
       logBotResponse(message, botMsg.content, 'Role Config');
     });
+    
+    // Save data after adding role
+    saveData();
   }
 
-  // REMOVE SELF-ASSIGNABLE ROLE (Admin/Mod only)
+  // REMOVE SELF-ASSIGNABLE ROLE (Admin/Mod only) - NOW SAVED
   if (command === 'removeassignablerole') {
     if (!message.member.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
       message.reply('❌ You need **Manage Roles** permission.').then(botMsg => {
@@ -1110,6 +1282,9 @@ client.on('messageCreate', async (message) => {
     message.reply(`✅ Removed **${role.name}** from self-assignable roles.`).then(botMsg => {
       logBotResponse(message, botMsg.content, 'Role Config');
     });
+    
+    // Save data after removing role
+    saveData();
   }
 
   // LIST SELF-ASSIGNABLE ROLES
@@ -1286,50 +1461,46 @@ client.on('messageCreate', async (message) => {
   }
 
   // PING COMMAND
-  // PING COMMAND
-// PING COMMAND WITH LATENCY
-if (command === 'ping') {
-  // Check if bot has permission to send messages in this channel
-  if (!hasPermission(message.channel, PermissionsBitField.Flags.SendMessages)) {
-    logToChannel(`❌ Missing Send Messages permission in ${message.channel}`);
-    return;
+  if (command === 'ping') {
+    // Check if bot has permission to send messages in this channel
+    if (!hasPermission(message.channel, PermissionsBitField.Flags.SendMessages)) {
+      logToChannel(`❌ Missing Send Messages permission in ${message.channel}`);
+      return;
+    }
+
+    const sent = await message.reply('🏓 Calculating ping...');
+    const latency = sent.createdTimestamp - message.createdTimestamp;
+    const apiLatency = Math.round(client.ws.ping);
+
+    const pingEmbed = {
+      color: 0x0099ff,
+      title: '🏓 Pong!',
+      fields: [
+        {
+          name: '📡 Bot Latency',
+          value: `**${latency}ms**`,
+          inline: true
+        },
+        {
+          name: '🌐 API Latency',
+          value: `**${apiLatency}ms**`,
+          inline: true
+        },
+        {
+          name: '💓 Heartbeat',
+          value: `**${client.ws.ping}ms**`,
+          inline: true
+        }
+      ],
+      footer: { text: `Requested by ${message.author.tag}` },
+      timestamp: new Date()
+    };
+
+    sent.edit({ content: null, embeds: [pingEmbed] });
+    logBotResponse(message, `Ping: ${latency}ms | API: ${apiLatency}ms`, 'Ping');
   }
 
-  const sent = await message.reply('🏓 Calculating ping...');
-  const latency = sent.createdTimestamp - message.createdTimestamp;
-  const apiLatency = Math.round(client.ws.ping);
-
-  const pingEmbed = {
-    color: 0x0099ff,
-    title: '🏓 Pong!',
-    fields: [
-      {
-        name: '📡 Bot Latency',
-        value: `**${latency}ms**`,
-        inline: true
-      },
-      {
-        name: '🌐 API Latency',
-        value: `**${apiLatency}ms**`,
-        inline: true
-      },
-      {
-        name: '💓 Heartbeat',
-        value: `**${client.ws.ping}ms**`,
-        inline: true
-      }
-    ],
-    footer: { text: `Requested by ${message.author.tag}` },
-    timestamp: new Date()
-  };
-
-  sent.edit({ content: null, embeds: [pingEmbed] });
-  logBotResponse(message, `Ping: ${latency}ms | API: ${apiLatency}ms`, 'Ping');
-}
-
-  
-
-  // ADD CUSTOM RESPONSE
+  // ADD CUSTOM RESPONSE - NOW SAVED
   if (command === 'addresponse') {
     if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
       message.reply('❌ You need **Manage Messages** permission.').then(botMsg => {
@@ -1352,6 +1523,9 @@ if (command === 'ping') {
     message.reply(`✅ Added custom response for trigger: **${trigger}**`).then(botMsg => {
       logBotResponse(message, botMsg.content, 'Config Update');
     });
+    
+    // Save data after adding response
+    saveData();
   }
 
   // LIST CUSTOM RESPONSES
@@ -1378,7 +1552,7 @@ if (command === 'ping') {
     });
   }
 
-  // REMOVE CUSTOM RESPONSE
+  // REMOVE CUSTOM RESPONSE - NOW SAVED
   if (command === 'removeresponse') {
     if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
       message.reply('❌ You need **Manage Messages** permission.').then(botMsg => {
@@ -1399,11 +1573,58 @@ if (command === 'ping') {
       message.reply(`✅ Removed custom response for: **${trigger}**`).then(botMsg => {
         logBotResponse(message, botMsg.content, 'Config Update');
       });
+      
+      // Save data after removing response
+      saveData();
     } else {
       message.reply('❌ No custom response found for that trigger.').then(botMsg => {
         logBotResponse(message, botMsg.content, 'Error');
       });
     }
+  }
+  
+  // NEW COMMAND: SAVEDATA (Force save)
+  if (command === 'savedata') {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      message.reply('❌ You need **Administrator** permission.').then(botMsg => {
+        logBotResponse(message, botMsg.content, 'Error');
+      });
+      return;
+    }
+    
+    saveData();
+    message.reply('💾 Data saved successfully!').then(botMsg => {
+      logBotResponse(message, botMsg.content, 'Data Save');
+    });
+  }
+  
+  // NEW COMMAND: VIEWDATA (View saved data stats)
+  if (command === 'viewdata') {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      message.reply('❌ You need **Administrator** permission.').then(botMsg => {
+        logBotResponse(message, botMsg.content, 'Error');
+      });
+      return;
+    }
+    
+    const statsEmbed = {
+      color: 0x0099ff,
+      title: '📊 Bot Data Statistics',
+      fields: [
+        { name: '⚠️ Users with Warnings', value: userWarnings.size.toString(), inline: true },
+        { name: '📝 Total Warnings', value: Array.from(userWarnings.values()).reduce((sum, warnings) => sum + warnings.length, 0).toString(), inline: true },
+        { name: '🤖 Custom Responses', value: customResponses.size.toString(), inline: true },
+        { name: '🎭 Self-Assignable Roles', value: selfAssignableRoles.size.toString(), inline: true },
+        { name: '⏰ Active Reminders', value: reminders.size.toString(), inline: true },
+        { name: '💾 Data File', value: fs.existsSync(DATA_FILE) ? 'Exists ✅' : 'Missing ❌', inline: true }
+      ],
+      footer: { text: `Requested by ${message.author.tag}` },
+      timestamp: new Date()
+    };
+    
+    message.reply({ embeds: [statsEmbed] }).then(botMsg => {
+      logBotResponse(message, 'Data statistics viewed', 'Data Stats');
+    });
   }
 });
 
