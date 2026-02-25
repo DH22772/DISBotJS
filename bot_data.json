@@ -1,21 +1,61 @@
 {
   "userWarnings": [],
   "customResponses": [],
-  "selfAssignableRoles": [
-    "1438616791550005340"
-  ],
+  "selfAssignableRoles": [],
   "userLevels": [
     [
       "622366192731947018",
       {
-        "xp": 0,
-        "level": 14,
-        "totalXp": 2575,
+        "xp": 45,
+        "level": 1,
+        "totalXp": 45,
         "guildId": "1107992054128189470",
-        "lastLevelUp": "2025-12-16T13:33:57.288Z"
+        "lastLevelUp": null
+      }
+    ],
+    [
+      "839153209159319613",
+      {
+        "xp": 20,
+        "level": 1,
+        "totalXp": 20,
+        "guildId": "1107992054128189470",
+        "lastLevelUp": null
       }
     ]
   ],
   "reminders": [],
-  "lastSaved": "2025-12-16T13:33:57.289Z"
+  "notifyChannels": [],
+  "userNotificationPrefs": [],
+  "lastStatuses": [
+    [
+      "622366192731947018",
+      {
+        "status": "dnd",
+        "timestamp": 1771688015619
+      }
+    ],
+    [
+      "839153209159319613",
+      {
+        "status": "offline",
+        "timestamp": 1771688015619
+      }
+    ],
+    [
+      "1438499256347525212",
+      {
+        "status": "offline",
+        "timestamp": 1771688015619
+      }
+    ],
+    [
+      "1438606227100667946",
+      {
+        "status": "offline",
+        "timestamp": 1771688015619
+      }
+    ]
+  ],
+  "lastSaved": "2026-02-21T15:38:13.535Z"
 }

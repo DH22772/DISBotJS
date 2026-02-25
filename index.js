@@ -8,6 +8,8 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildPresences, // ADDED FOR ONLINE NOTIFICATIONS
+    GatewayIntentBits.GuildVoiceStates, // ADDED FOR VOICE NOTIFICATIONS
   ]
 });
 
@@ -18,6 +20,11 @@ const reminders = new Map();
 const selfAssignableRoles = new Set();
 const userLevels = new Map(); // Store user levels and XP
 const xpCooldowns = new Map(); // Store XP cooldowns
+
+// ONLINE NOTIFICATION COLLECTIONS
+const notifyChannels = new Map(); // guildId -> channelId for notifications
+const userNotificationPrefs = new Map(); // userId -> { notify: boolean }
+const lastStatuses = new Map(); // userId -> { status: string, timestamp: number }
 
 let logChannel = null;
 
@@ -221,6 +228,99 @@ async function handleXpGain(message) {
   }
 }
 
+// ==================== ONLINE NOTIFICATION FUNCTIONS ====================
+
+// Function to send online notification
+function sendOnlineNotification(channel, member, offlineDuration = 0) {
+  try {
+    // Format offline duration
+    let durationText = '';
+    if (offlineDuration > 0) {
+      const hours = Math.floor(offlineDuration / (1000 * 60 * 60));
+      const minutes = Math.floor((offlineDuration % (1000 * 60 * 60)) / (1000 * 60));
+      
+      if (hours > 0) {
+        durationText = ` after ${hours} hour${hours !== 1 ? 's' : ''}`;
+        if (minutes > 0) {
+          durationText += ` and ${minutes} minute${minutes !== 1 ? 's' : ''}`;
+        }
+      } else if (minutes > 5) { // Only show if more than 5 minutes
+        durationText = ` after ${minutes} minute${minutes !== 1 ? 's' : ''}`;
+      }
+    }
+    
+    // Get user activity
+    const presence = member.presence;
+    const activities = presence?.activities || [];
+    let activityText = 'Just hanging out';
+    let activityEmoji = '💭';
+    
+    if (activities.length > 0) {
+      const activity = activities[0];
+      
+      switch(activity.type) {
+        case 0: // Playing
+          activityText = `Playing **${activity.name}**`;
+          activityEmoji = '🎮';
+          break;
+        case 1: // Streaming
+          activityText = `Streaming **${activity.name}**`;
+          activityEmoji = '📺';
+          break;
+        case 2: // Listening
+          activityText = `Listening to **${activity.name}**`;
+          activityEmoji = '🎵';
+          break;
+        case 3: // Watching
+          activityText = `Watching **${activity.name}**`;
+          activityEmoji = '📺';
+          break;
+        case 4: // Custom
+          activityText = activity.state || 'Custom status';
+          activityEmoji = '📝';
+          break;
+        case 5: // Competing
+          activityText = `Competing in **${activity.name}**`;
+          activityEmoji = '🏆';
+          break;
+      }
+    }
+    
+    // Create notification embed
+    const notificationEmbed = new EmbedBuilder()
+      .setColor(0x00ff00)
+      .setTitle('🌐 Friend Online!')
+      .setDescription(`${activityEmoji} **${activityText}**${durationText}`)
+      .setThumbnail(member.user.displayAvatarURL({ dynamic: true, size: 256 }))
+      .addFields(
+        { name: '👤 User', value: member.user.tag, inline: true },
+        { name: '🎮 Status', value: member.presence?.activities[0]?.name || 'No activity', inline: true },
+        { name: '🕐 Joined Server', value: `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>`, inline: true }
+      )
+      .setFooter({ text: 'Say hi! 👋' })
+      .setTimestamp();
+    
+    // Check if user wants to be mentioned
+    const userPrefs = userNotificationPrefs.get(member.id);
+    const mention = (userPrefs?.notify !== false) ? `<@${member.id}>` : '';
+    
+    // Send notification
+    channel.send({ 
+      content: `${mention} ${member.user.username} is here! 👋`, 
+      embeds: [notificationEmbed] 
+    })
+    .then(() => {
+      logToChannel(`🌐 **Online Notification** - ${member.user.tag} came online in ${channel.name}`);
+    })
+    .catch(error => {
+      console.error('Failed to send online notification:', error);
+    });
+    
+  } catch (error) {
+    console.error('Error in sendOnlineNotification:', error);
+  }
+}
+
 // ==================== DATA PERSISTENCE SYSTEM ====================
 const DATA_FILE = './bot_data.json';
 
@@ -231,12 +331,16 @@ function saveData() {
       userWarnings: Array.from(userWarnings.entries()),
       customResponses: Array.from(customResponses.entries()),
       selfAssignableRoles: Array.from(selfAssignableRoles),
-      userLevels: Array.from(userLevels.entries()), // Add levels to save
+      userLevels: Array.from(userLevels.entries()),
       reminders: Array.from(reminders.entries()).map(([id, reminder]) => ({
         id,
         ...reminder,
-        time: reminder.time // Save timestamp
+        time: reminder.time
       })),
+      // ONLINE NOTIFICATION DATA
+      notifyChannels: Array.from(notifyChannels.entries()),
+      userNotificationPrefs: Array.from(userNotificationPrefs.entries()),
+      lastStatuses: Array.from(lastStatuses.entries()),
       lastSaved: new Date().toISOString()
     };
     
@@ -332,6 +436,31 @@ function loadData() {
         console.log(`📂 Loaded ${reminders.size} active reminders`);
       }
       
+      // LOAD ONLINE NOTIFICATION DATA
+      if (data.notifyChannels && Array.isArray(data.notifyChannels)) {
+        notifyChannels.clear();
+        data.notifyChannels.forEach(([guildId, channelId]) => {
+          notifyChannels.set(guildId, channelId);
+        });
+        console.log(`📂 Loaded ${notifyChannels.size} notification channels`);
+      }
+      
+      if (data.userNotificationPrefs && Array.isArray(data.userNotificationPrefs)) {
+        userNotificationPrefs.clear();
+        data.userNotificationPrefs.forEach(([userId, prefs]) => {
+          userNotificationPrefs.set(userId, prefs);
+        });
+        console.log(`📂 Loaded ${userNotificationPrefs.size} user notification preferences`);
+      }
+      
+      if (data.lastStatuses && Array.isArray(data.lastStatuses)) {
+        lastStatuses.clear();
+        data.lastStatuses.forEach(([userId, statusData]) => {
+          lastStatuses.set(userId, statusData);
+        });
+        console.log(`📂 Loaded ${lastStatuses.size} user statuses`);
+      }
+      
       if (data.lastSaved) {
         console.log(`📅 Data last saved: ${new Date(data.lastSaved).toLocaleString()}`);
       }
@@ -392,7 +521,7 @@ async function sendStartupMessage() {
           .addFields(
             {
               name: '📊 Startup Information',
-              value: `• Bot: ${client.user.tag}\n• Loaded ${userWarnings.size} warned users\n• Loaded ${customResponses.size} custom responses\n• Loaded ${selfAssignableRoles.size} self-assignable roles\n• Loaded ${reminders.size} active reminders\n• Loaded ${userLevels.size} user levels`,
+              value: `• Bot: ${client.user.tag}\n• Loaded ${userWarnings.size} warned users\n• Loaded ${customResponses.size} custom responses\n• Loaded ${selfAssignableRoles.size} self-assignable roles\n• Loaded ${reminders.size} active reminders\n• Loaded ${userLevels.size} user levels\n• Loaded ${notifyChannels.size} notification channels`,
               inline: false
             },
             {
@@ -439,7 +568,7 @@ async function sendShutdownMessage() {
           .addFields(
             {
               name: '📊 Shutdown Information',
-              value: `• Bot: ${client.user.tag}\n• Saved ${userWarnings.size} warned users\n• Saved ${customResponses.size} custom responses\n• Saved ${selfAssignableRoles.size} self-assignable roles\n• Saved ${reminders.size} active reminders\n• Saved ${userLevels.size} user levels`,
+              value: `• Bot: ${client.user.tag}\n• Saved ${userWarnings.size} warned users\n• Saved ${customResponses.size} custom responses\n• Saved ${selfAssignableRoles.size} self-assignable roles\n• Saved ${reminders.size} active reminders\n• Saved ${userLevels.size} user levels\n• Saved ${notifyChannels.size} notification channels`,
               inline: false
             },
             {
@@ -567,7 +696,7 @@ client.once('ready', async () => {
     }
     
     logToChannel('🤖 Bot started and ready!');
-    logToChannel(`📊 Loaded data: ${userWarnings.size} warned users, ${customResponses.size} custom responses, ${selfAssignableRoles.size} self-assignable roles, ${userLevels.size} user levels`);
+    logToChannel(`📊 Loaded data: ${userWarnings.size} warned users, ${customResponses.size} custom responses, ${selfAssignableRoles.size} self-assignable roles, ${userLevels.size} user levels, ${notifyChannels.size} notification channels`);
     
     // Send startup message to test-1 channel
     await sendStartupMessage();
@@ -581,6 +710,116 @@ client.once('ready', async () => {
     console.log('❌ Could not find bot-log channel');
     // Still send startup message even if log channel not found
     await sendStartupMessage();
+  }
+  
+  // Initialize status tracking for all members
+  console.log('👥 Initializing status tracking...');
+  client.guilds.cache.forEach(guild => {
+    guild.members.fetch().then(members => {
+      members.forEach(member => {
+        if (!member.user.bot) {
+          lastStatuses.set(member.id, {
+            status: member.presence?.status || 'offline',
+            timestamp: Date.now()
+          });
+        }
+      });
+      console.log(`👥 Tracked ${members.filter(m => !m.user.bot).size} members in ${guild.name}`);
+    }).catch(console.error);
+  });
+});
+
+// ==================== ONLINE STATUS TRACKING ====================
+
+// Track when members change status
+client.on('presenceUpdate', (oldPresence, newPresence) => {
+  try {
+    // Skip if no member or it's a bot
+    if (!newPresence?.member || newPresence.member.user.bot) return;
+    
+    const userId = newPresence.member.id;
+    const oldStatus = oldPresence?.status || 'offline';
+    const newStatus = newPresence.status || 'offline';
+    
+    // Store current status
+    lastStatuses.set(userId, {
+      status: newStatus,
+      timestamp: Date.now()
+    });
+    
+    // Check for offline -> online transition
+    if (oldStatus === 'offline' && newStatus === 'online') {
+      const member = newPresence.member;
+      const guild = member.guild;
+      
+      // Check if notifications are enabled for this guild
+      const notifyChannelId = notifyChannels.get(guild.id);
+      if (!notifyChannelId) return;
+      
+      const channel = guild.channels.cache.get(notifyChannelId);
+      if (!channel) return;
+      
+      // Check if bot can send messages
+      if (!hasPermission(channel, PermissionsBitField.Flags.SendMessages)) return;
+      
+      // Get offline duration from stored data
+      const userLastStatus = lastStatuses.get(userId) || { timestamp: Date.now() };
+      const offlineDuration = Date.now() - userLastStatus.timestamp;
+      
+      // Send notification
+      sendOnlineNotification(channel, member, offlineDuration);
+    }
+    
+  } catch (error) {
+    console.error('Error in presenceUpdate:', error);
+  }
+});
+
+// BONUS: Voice chat notifications
+client.on('voiceStateUpdate', (oldState, newState) => {
+  try {
+    // Skip bots
+    if (newState.member?.user.bot || oldState?.member?.user.bot) return;
+    
+    const guild = newState.guild;
+    const member = newState.member;
+    const notifyChannelId = notifyChannels.get(guild.id);
+    
+    if (!notifyChannelId) return;
+    
+    const channel = guild.channels.cache.get(notifyChannelId);
+    if (!channel || !hasPermission(channel, PermissionsBitField.Flags.SendMessages)) return;
+    
+    // User joined a voice channel
+    if (!oldState.channelId && newState.channelId) {
+      const vcEmbed = new EmbedBuilder()
+        .setColor(0x3498db)
+        .setTitle('🎤 Joined Voice Chat')
+        .setDescription(`**${member.user.username}** joined ${newState.channel}`)
+        .setThumbnail(member.user.displayAvatarURL())
+        .setFooter({ text: 'Voice Activity' })
+        .setTimestamp();
+      
+      channel.send({ embeds: [vcEmbed] })
+        .catch(error => console.error('Failed to send VC join notification:', error));
+    }
+    
+    // User left a voice channel
+    else if (oldState.channelId && !newState.channelId) {
+      const vcEmbed = new EmbedBuilder()
+        .setColor(0xe74c3c)
+        .setTitle('🎤 Left Voice Chat')
+        .setDescription(`**${member.user.username}** left ${oldState.channel}`)
+        .setThumbnail(member.user.displayAvatarURL())
+        .setFooter({ text: 'Voice Activity' })
+        .setTimestamp();
+      
+      channel.send({ embeds: [vcEmbed] })
+        .catch(error => console.error('Failed to send VC leave notification:', error));
+    }
+    
+  } catch (error) {
+    console.error('Error in voiceStateUpdate:', error);
   }
 });
 
@@ -1145,9 +1384,108 @@ client.on('messageCreate', async (message) => {
     // Log all commands received
     logToChannel(`**Command Received** in ${message.channel}\n**User:** ${message.author.tag} | **Command:** ${message.content}`);
 
+    // ==================== ONLINE NOTIFICATION COMMANDS ====================
+
+    // SET ONLINE NOTIFICATION CHANNEL
+    if (command === 'setonlinenotif' || command === 'setonlinenotifications') {
+      if (!message.member.permissions.has(PermissionsBitField.Flags.ManageChannels)) {
+        const errorEmbed = createErrorEmbed('❌ You need **Manage Channels** permission.');
+        return message.reply({ embeds: [errorEmbed] });
+      }
+      
+      const channel = message.mentions.channels.first() || message.channel;
+      
+      notifyChannels.set(message.guild.id, channel.id);
+      
+      const successEmbed = createSuccessEmbed(`✅ Online notifications will be sent to ${channel}`);
+      message.reply({ embeds: [successEmbed] }).then(botMsg => {
+        logBotResponse(message, botMsg.content, 'Config Update');
+      });
+      
+      // Save to data
+      saveData();
+    }
+
+    // DISABLE ONLINE NOTIFICATIONS
+    if (command === 'disableonlinenotif' || command === 'disableonlinenotifications') {
+      if (!message.member.permissions.has(PermissionsBitField.Flags.ManageChannels)) {
+        const errorEmbed = createErrorEmbed('❌ You need **Manage Channels** permission.');
+        return message.reply({ embeds: [errorEmbed] });
+      }
+      
+      notifyChannels.delete(message.guild.id);
+      
+      const successEmbed = createSuccessEmbed('✅ Online notifications have been disabled.');
+      message.reply({ embeds: [successEmbed] }).then(botMsg => {
+        logBotResponse(message, botMsg.content, 'Config Update');
+      });
+      
+      // Save to data
+      saveData();
+    }
+
+    // CHECK ONLINE NOTIFICATION STATUS
+    if (command === 'onlinenotifstatus') {
+      const channelId = notifyChannels.get(message.guild.id);
+      let statusText = '❌ **Disabled**';
+      
+      if (channelId) {
+        const channel = message.guild.channels.cache.get(channelId);
+        statusText = channel ? `✅ **Enabled** in ${channel}` : '❌ **Channel not found**';
+      }
+      
+      const statusEmbed = new EmbedBuilder()
+        .setColor(0x0099ff)
+        .setTitle('🌐 Online Notification Status')
+        .setDescription(statusText)
+        .addFields(
+          { name: '⚙️ Commands', value: '`!setonlinenotif #channel` - Enable\n`!disableonlinenotif` - Disable', inline: false },
+          { name: '📝 Note', value: 'Only shows when users change from **offline** to **online** status', inline: false }
+        )
+        .setFooter({ text: 'Currently tracking status changes' });
+      
+      message.reply({ embeds: [statusEmbed] }).then(botMsg => {
+        logBotResponse(message, botMsg.content, 'Status Check');
+      });
+    }
+
+    // ALLOW USERS TO OPT IN/OUT OF NOTIFICATIONS
+    if (command === 'notifyme') {
+      const action = args[0]?.toLowerCase();
+      
+      if (action === 'on' || action === 'enable') {
+        userNotificationPrefs.set(message.author.id, { notify: true });
+        
+        const embed = createSuccessEmbed('✅ You will now be notified when friends come online!');
+        message.reply({ embeds: [embed] });
+        saveData();
+        
+      } else if (action === 'off' || action === 'disable') {
+        userNotificationPrefs.set(message.author.id, { notify: false });
+        
+        const embed = createSuccessEmbed('✅ You will NOT be notified when friends come online.');
+        message.reply({ embeds: [embed] });
+        saveData();
+        
+      } else {
+        const current = userNotificationPrefs.get(message.author.id)?.notify ?? true;
+        
+        const embed = new EmbedBuilder()
+          .setColor(0x0099ff)
+          .setTitle('🔔 Your Notification Settings')
+          .setDescription(`Currently: **${current ? 'Enabled ✅' : 'Disabled ❌'}**`)
+          .addFields(
+            { name: 'Commands', value: '`!notifyme on` - Get notified\n`!notifyme off` - No notifications', inline: false },
+            { name: 'Note', value: 'Admins can still enable/disable the feature entirely', inline: false }
+          );
+        
+        message.reply({ embeds: [embed] });
+      }
+    }
+
     // ==================== LEVEL MANAGEMENT COMMANDS ====================
 
-        // ADD LEVEL COMMAND (Admin/Mod only)
+    // ADD LEVEL COMMAND (Admin/Mod only)
     if (command === 'addlevel' || command === 'levelup') {
       if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
         const errorEmbed = createErrorEmbed('❌ You need **Manage Messages** permission.');
@@ -2099,7 +2437,7 @@ client.on('messageCreate', async (message) => {
       });
     }
 
-    // ==================== EXISTING COMMANDS (STARTING FROM HERE) ====================
+    // ==================== EXISTING COMMANDS ====================
 
     // SETUP INFO CHANNELS COMMAND
     if (command === 'setupinfo') {
@@ -2838,6 +3176,11 @@ client.on('messageCreate', async (message) => {
         .setDescription('Here are all available commands:')
         .addFields(
           {
+            name: '🌐 Online Notifications',
+            value: '`!setonlinenotif #channel` - Set notification channel (Admin)\n`!disableonlinenotif` - Disable notifications (Admin)\n`!onlinenotifstatus` - Check status\n`!notifyme on/off` - Opt in/out of mentions',
+            inline: false
+          },
+          {
             name: '🛡️ Silent Moderation',
             value: '`!kick @user [reason]` - Kick user (no channel response)\n`!ban @user [reason]` - Ban user (no channel response)\n`!warn @user [reason]` - Warn user (no channel response)\n`!warnings @user` - Check warnings (no channel response)\n`!clearwarnings @user` - Clear warnings (no channel response)\n`!clear 1-100` - Clear messages (no channel response)',
             inline: false
@@ -3083,6 +3426,8 @@ client.on('messageCreate', async (message) => {
           { name: '🎭 Self-Assignable Roles', value: selfAssignableRoles.size.toString(), inline: true },
           { name: '📈 User Levels', value: userLevels.size.toString(), inline: true },
           { name: '✨ Total XP Awarded', value: totalXp.toLocaleString(), inline: true },
+          { name: '🌐 Notification Channels', value: notifyChannels.size.toString(), inline: true },
+          { name: '🔔 User Notification Prefs', value: userNotificationPrefs.size.toString(), inline: true },
           { name: '⏰ Active Reminders', value: reminders.size.toString(), inline: true },
           { name: '💾 Data File', value: fs.existsSync(DATA_FILE) ? 'Exists ✅' : 'Missing ❌', inline: true }
         )
