@@ -2656,7 +2656,7 @@ client.on('messageCreate', async (message) => {
         .then(() => {
           const banEmbed = new EmbedBuilder()
             .setColor(0xff0000)
-            .setTitle('🛡️ User Banned')
+            .setTitle('🛡️ Kishted The User')
             .addFields(
               { name: 'User', value: `${member.user.tag} (${member.id})`, inline: true },
               { name: 'Moderator', value: message.author.tag, inline: true },
@@ -2667,7 +2667,7 @@ client.on('messageCreate', async (message) => {
           
           logToChannel({ embeds: [banEmbed] });
           
-          const dmEmbed = createEmbed('🔨 You have been banned', `You have been banned from **${message.guild.name}** for: ${reason}`, 0xff0000);
+          const dmEmbed = createEmbed('🔨 You have been Kishted', `You have been Kishted from **${message.guild.name}** for: ${reason}`, 0xff0000);
           member.send({ embeds: [dmEmbed] })
             .catch(() => logToChannel('❌ Could not DM banned user'));
         })

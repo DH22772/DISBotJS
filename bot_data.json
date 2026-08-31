@@ -6,21 +6,21 @@
     [
       "622366192731947018",
       {
-        "xp": 45,
-        "level": 1,
-        "totalXp": 45,
+        "xp": 55,
+        "level": 2,
+        "totalXp": 155,
         "guildId": "1107992054128189470",
-        "lastLevelUp": null
+        "lastLevelUp": "2026-08-28T12:48:38.018Z"
       }
     ],
     [
       "839153209159319613",
       {
-        "xp": 20,
-        "level": 1,
-        "totalXp": 20,
+        "xp": 78,
+        "level": 2,
+        "totalXp": 178,
         "guildId": "1107992054128189470",
-        "lastLevelUp": null
+        "lastLevelUp": "2026-08-28T12:49:17.854Z"
       }
     ]
   ],
@@ -31,31 +31,31 @@
     [
       "622366192731947018",
       {
-        "status": "dnd",
-        "timestamp": 1771688015619
+        "status": "offline",
+        "timestamp": 1787922183529
       }
     ],
     [
       "839153209159319613",
       {
-        "status": "offline",
-        "timestamp": 1771688015619
+        "status": "online",
+        "timestamp": 1787921142652
       }
     ],
     [
       "1438499256347525212",
       {
         "status": "offline",
-        "timestamp": 1771688015619
+        "timestamp": 1787921047692
       }
     ],
     [
       "1438606227100667946",
       {
         "status": "offline",
-        "timestamp": 1771688015619
+        "timestamp": 1787921047692
       }
     ]
   ],
-  "lastSaved": "2026-02-21T15:38:13.535Z"
+  "lastSaved": "2026-08-28T13:03:12.604Z"
 }
